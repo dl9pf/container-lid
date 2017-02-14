@@ -1,38 +1,24 @@
 #!/opt/pypy/bin/pypy
 
-def scan_pkgfiles(files, dname, fname, pkgdoc, filecount):
-    import hashlib
+def scan_download(uri, sourcepkg, extracted_dir, fname):
+    fhash = filehash(sourcepkg)
 
-    if fname not in pkgdoc['package_files']:
-        pkgdoc['package_files'][fname] = {}
+    # TODO connect LiD scanning
+    license = "LIC-TBD"
+    scanresultsfile = "/path/to/scan/results"
 
-    if dname not in pkgdoc['package_files'][fname]:
-        pkgdoc['package_files'][fname][dname] = {}
+    return (fhash, license, scanresultsfile)
 
-
+def scan_pkgfiles(files):
+    pkgfile = {}
     for f in files:
-        if not os.path.islink(os.path.join(dname, f)):
-            with open(os.path.join(dname, f), 'rb') as curfile:
-                pkgdoc['package_files'][fname][dname][f] = hashlib.md5(curfile.read()).hexdigest()
-                print(os.path.join(dname, f))
-                filecount += 1
-    return filecount
+        if not os.path.islink(f):
+            pkgfile[f] = (filehash(f), "LIC-TBD", "/path/to/scan/file")
+    return pkgfile
 
-def scan_extracted(fname, extracteddir, pkgdoc):
-    import time
-
-    if fname not in pkgdoc['package_files']:
-        pkgdoc['package_files'][fname] = {}
-
-    if 1:
-        t0 = time.time()
-        filecount = 0
-        for dname, subdirs, files in os.walk(extracteddir):
-            for f in files:
-                filecount = scan_pkgfiles(files, dname, fname, pkgdoc, filecount)
-                t1 = time.time()
-                total = t1-t0
-                print("Scanned %d files in %d" % (filecount, total))
+def scan_extracted(fname, extracteddir):
+    # TBD Pass dir to LiD for scanning
+    print("TBD - connect LiD scanner")
 
 def filehash(fname):
     import hashlib
@@ -43,65 +29,6 @@ def filehash(fname):
     print("ERROR: cound not open %s" % fname)
     raise SystemExit
 
-def scan(node, extracteddir, pkgname):
-    import hashlib
-
-    pkgbname = os.path.basename(pkgname)
-    pname = os.path.join(scandir, pkgbname+".scan")
-    pkgdoc = {}
-    pkgdoc['packages'] = {}
-    pkgdoc['files'] = {}
-    pkgdoc['package_files'] = {}
-    if os.path.isfile(pname):
-        print("LOADING: %s" % pname)
-        with codecs.open(pname, mode='r', encoding='utf-8') as f:
-            pkgdoc = json.load(f)
-
-    if os.path.isfile(node):
-        if os.path.islink(node):
-            return
-
-        found = 0
-        dname = os.path.dirname(node)
-        bname = os.path.basename(node)
-
-        if node.endswith(".tar.gz") or node.endswith(".tar.bz2") or node.endswith(".tar.xz"):
-            if dname in pkgdoc['packages']:
-                if bname in pkgdoc['packages'][dname]:
-                    found = 1
-            else:
-                pkgdoc['packages'][dname] = {}
-
-            newhash = filehash(node)
-            if not found:
-                pkgdoc['packages'][dname][bname] = newhash
-                scan_extracted(node, extracteddir, pkgdoc)
-            else:
-                if newhash != pkgdoc['packages'][dname][bname]:
-                    pkgdoc['packages'][dname][bname] = newhash
-                    scan_extracted(node, extracteddir, pkgdoc)
-        else:
-            if dname in pkgdoc['files']:
-                if bname in pkgdoc['files'][dname]:
-                    found = 1
-            else:
-                pkgdoc['files'][dname] = {}
-
-            if not found:
-                pkgdoc['files'][dname][bname] = filehash(node)
-
-    elif os.path.isdir(node):
-        # This should not happen
-        print("ERROR: Directory passed as file to scan")
-        raise SystemExit
-    else:
-        print("ERROR: path not found: %s" % node)
-        raise SystemExit
-
-    with codecs.open(pname, mode='w', encoding='utf-8') as f:
-            f.write(json.dumps(pkgdoc, indent = 4))
-    
-    
 def get_license_from_smpkg(pkgname):
     if not pkgname:
         print("ERROR: packagename is empty")
@@ -171,17 +98,25 @@ def dump_smpkg(pkgname, dumped_list):
             if srcdirdep:
                     print("        %s -> %s" % (smpkgdoc['UnresolvedSrcDir'], srcdirdep))
 
-            print("    PatchedFiles:")
+            pfiles = []
             if 'PatchedFiles' in smpkgdoc:
                 for p in smpkgdoc['PatchedFiles']:
-                    fname = os.path.join(smpkgdoc['SourceDir'], p)
-                    print("        %s" % fname)
-                    #scan(fname, "", pkgname)
+                    pfiles.append(os.path.join(smpkgdoc['SourceDir'], p))
+
+            pkfiles = []
             if 'Files' in smpkgdoc:
                 for p in smpkgdoc['Files']:
-                    fname = p[1]
-                    print("        %s" % fname)
-                    #scan(fname, "", pkgname)
+                    pkfiles.append(p[1])
+
+            scan_results = scan_pkgfiles(pfiles+pkfiles)
+            print("    PatchedFiles:")
+            for p in pfiles:
+                print("        %s (%s)" % (p,scan_results[p][1]))
+                print("            Hash: %s" % scan_results[p][0])
+            print("    PackageFiles:")
+            for p in pkfiles:
+                print("        %s (%s)" % (p,scan_results[p][1]))
+                print("            Hash: %s" % scan_results[p][0])
 
             dumped_list.append(pkgname)
 
@@ -204,11 +139,13 @@ def dump_uri_info(fname):
     print("DOWNLOAD: "+fname);
     with codecs.open(fname, mode='r', encoding='utf-8') as f2:
         uridoc = json.load(f2)
+        (fhash, license, scanfileresults) = scan_download(uridoc['URI'], uridoc['Source'], uridoc['ExtractedDir'], fname)
         print("    URI:")
-        print("        %s" % uridoc['URI'])
+        print("        %s (%s)" % (uridoc['URI'], license))
         print("    Source:")
         print("        %s" % uridoc['Source'])
-        #scan(uridoc['Source'], uridoc['ExtractedDir'], fname)
+        print("    Hash:")
+        print("        %s" % fhash)
 
 def get_dependency_file(pkg):
     if pkg in host_pkgs:
